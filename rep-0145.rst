@@ -65,6 +65,8 @@ Data Sources
   - The accelerometers report linear acceleration data expressed in the sensor frame of the device. This data is output from the driver as a 3D vector, representing the specific force acting on the sensor.
 
   - When the device is at rest, the vector will represent the specific force solely due to gravity. I.e. if the body `z` axis points upwards, its `z` axis should indicate +g. This data must be in m/s^2.
+  
+  - Specific force is the non-gravity-induced acceleration of a body (or acceleration "relative to" free fall). That is why the specific force of a body in rest is +g (the specific force must be the opposite of gravity to keep the body in rest). Specific force of a free falling body is zero.
 
 * Gyroscopes
 
@@ -120,23 +122,41 @@ It is expected that downstream users may want to use data from multiple of these
 Namespacing
 '''''''''''
 
-By convention, IMU output topics are pushed down to a local namespace. The primary source of IMU data for a system is published in the `imu` namespace. Additional sources, such as secondary IMUs or unprocessed raw data should be published in alternative `imu_...` local namespaces. IMU driver implementations should take care to allow convenient remapping of the local namespace through a single remap argument (e.g. imu:=imu_raw), rather than separate remap calls for each topic. The following are some standard namespaces to represent certain types of data:
+By convention, IMU output topics are pushed down to a local namespace. The primary source of IMU data for a system is published in the `imu` namespace. Additional sources, such as secondary IMUs or unprocessed raw data should be published in alternative `imu_...` local namespaces.
+
+IMU driver implementations should take care to allow convenient remapping of the local namespace through a single remap argument (e.g. imu:=imu_raw), rather than separate remap calls for each topic. The following are some standard namespaces to represent certain types of data:
+
+* `imu`
+
+  - Containing topics of possibly biased data with non-compensated gravity.
+  - Whether the data are biased or not is up to the driver.
 
 * `imu_raw`
 
-  - Containing topics of raw data
+  - Containing topics of raw data as reported by the IMU.
+  - It is not known if these data are with or without bias, or if gravity is compensated in them. However, the data should still be valid according to this REP, so they should be right-handed and in SI units.
 
 * `imu_unbiased`
 
-  - Containing topics of unbiased data
-
-* `imu_biased`
-
-  - Containing topics of biased data
+  - Containing topics of unbiased data with non-compensated gravity.
 
 * `imu_compensated`
 
-  - Containing topics of gravity compensated data
+  - Containing gravity-compensated and unbiased accelerations.
+  - Angular velocities, magnetometer data or orientations do not make sense in this namespace.
+
+Bias Removal and Gravity Compensation
+'''''''''''''''''''''''''''''''''''''
+  
+All sensors an IMU consists of are subject to a time-varying bias caused by many physical phenomena. The following text refers to "biased" data as to the data with bias not removed. "Unbiased" data are those from which a best estimate of the bias has been removed (so that e.g. integrating angular velocities of a body in rest should result in almost zero). Depending on the SDK of a particular IMU, the driver can directly publish to `imu_unbiased` namespace if the values are provided by the IMU. Otherwise, it should publish to the `imu` namespace. It can quite easily happen that e.g. accelerations are already unbiased by the SDK, while angular velocities are not. This should be reflected by the (non-presence) of each of the sub-topics in the relevant namespaces.
+
+To compute and remove the bias, calibration procedures are usually required that impose physical requirements on the system, such as being stationary, or rotating in place. That is why it is not possible to write fully automated drivers for bias removal. The users are expected to manually (or semi-automatically) run the calibration procedures and tell the driver to perform bias estimation. Once the bias is estimated, it can be removed. As the bias is time-varying, it is also possible to run continuous bias estimation (e.g. re-estimating the bias while the system is stopped).
+
+For both gyroscopes, accelerometers and magnetometers, linear additive bias models are very popular. If the driver uses these models, it is suggested to publish the bias values to topics in namespace `imu_bias` and of the same types and names as their source data. A generic node can then take e.g. the data from `imu_biased/angular_velocity` and `imu_bias/angular_velocity` and compute `imu_unbiased/angular_velocity`. The bias should either be published at the same frequency as its related source data (with exactly same timestamps), or it should be published only on change (making the publisher latched). The covariance of the bias should be either properly filled, or its first element should be `NaN`. Some bias removal nodes can make use of the covariance, while other may ignore it.
+
+Due to its nature, it is not an error to run bias removal on already unbiased data. This is why it should be considered safe to take data from `imu/` namespace and run a bias estimation and removal algorithm on them, creating the `imu_unbiased/` data, which are already surely unbiased.
+
+Gravity compensation is similar in this regard - if a driver directly publishes gravity-compensated accelerations, they should be published in `imu_compensated` namespace. However, this REP specifies the acceleration values as specific force, so each gravity-compensating IMU should also "add back" the gravity and publish the non-compensated data in `imu` namespace. If the gravity magnitude and orientation is explicitly available, it can be published to `imu/gravity` with type sensor_msgs/LinearAcceleration. Generic nodes can exist that take `imu/gravity` and `imu_unbiased/linear_acceleration` and produce `imu_compensated/linear_acceleration` (or vice versa). The covariance of the gravity should be either properly filled, or its first element should be `NaN`. Some gravity compensation nodes can make use of the covariance, while other may ignore it.
 
 Common Parameters
 -----------------
